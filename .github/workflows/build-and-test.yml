@@ -1,0 +1,127 @@
+name: Build and Test
+
+on:
+  push:
+    tags:
+      - "*"
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  XGENEXT2FS_VERSION: 1.5.6
+  IMAGE_KERNEL_VERSION: 0.20.0
+  MACHINE_EMULATOR_VERSION: 0.19.0
+  LINUX_KERNEL_VERSION: 6.5.13-ctsi-1-v0.20.0
+
+jobs:
+  build-and-test:
+    name: Build and Test (${{ matrix.project }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      matrix:
+        project:
+          - echo
+          - handling-assets
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Setup PNPM
+        uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: lts/*
+          cache: pnpm
+
+      - name: Setup Foundry
+        uses: foundry-rs/foundry-toolchain@8b0419c685ef46cb79ec93fbdc131174afceb730 # v1.3.1
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392 # v3.6.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3.10.0
+
+      - name: Cache Cartesi dependencies
+        id: cache-cartesi
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: |
+            /tmp/machine-emulator_amd64.deb
+            /tmp/xgenext2fs_amd64.deb
+            /tmp/linux.bin
+          key: cartesi-deps-${{ env.MACHINE_EMULATOR_VERSION }}-${{ env.XGENEXT2FS_VERSION }}-${{ env.LINUX_KERNEL_VERSION }}
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            autoconf \
+            automake \
+            build-essential \
+            libarchive-dev \
+            libc6-dev \
+            libtool \
+            liblz4-dev \
+            liblzma-dev \
+            liblzo2-dev \
+            libzstd-dev \
+            zlib1g-dev \
+            libslirp-dev
+
+      - name: Download Cartesi Machine dependencies
+        if: steps.cache-cartesi.outputs.cache-hit != 'true'
+        run: |
+          wget -q https://github.com/cartesi/machine-emulator/releases/download/v${{ env.MACHINE_EMULATOR_VERSION }}/machine-emulator_amd64.deb \
+            -O /tmp/machine-emulator_amd64.deb
+          wget -q https://github.com/cartesi/genext2fs/releases/download/v${{ env.XGENEXT2FS_VERSION }}/xgenext2fs_amd64.deb \
+            -O /tmp/xgenext2fs_amd64.deb
+          curl -fsSL "https://github.com/cartesi/image-kernel/releases/download/v${{ env.IMAGE_KERNEL_VERSION }}/linux-${{ env.LINUX_KERNEL_VERSION }}.bin" \
+            -o /tmp/linux.bin
+          echo "e4663365ea565792110129a6b479eca896cb31c23f561cb42214609588689f9d3d173a82b4ea27ff74ae05334747cc76ed6bc4c200a7499ac5134abfd2b3045e /tmp/linux.bin" \
+            | sha512sum -c
+
+      - name: Install Cartesi dependencies
+        run: |
+          sudo dpkg -i /tmp/machine-emulator_amd64.deb || sudo apt-get install -f -y
+          sudo ldconfig
+          sudo dpkg -i /tmp/xgenext2fs_amd64.deb || sudo apt-get install -f -y
+          sudo mkdir -p /usr/share/cartesi-machine/images
+          sudo cp /tmp/linux.bin /usr/share/cartesi-machine/images/linux.bin
+
+      - name: Create libc.so symlink for node-cartesi-machine
+        run: |
+          sudo ln -sf /lib/x86_64-linux-gnu/libc.so.6 /usr/lib/libc.so
+          sudo ln -sf /lib/x86_64-linux-gnu/libc.so.6 /usr/local/lib/libc.so
+
+      - name: Install Node.js dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Cartesi CLI
+        run: pnpm install -g @cartesi/cli@2.0.0-alpha.20
+
+      - name: Run Cartesi Doctor
+        run: cartesi doctor
+
+      - name: Build Project
+        run: cartesi build -c cartesi.${{ matrix.project }}.toml
+
+      - name: Generate contract types
+        run: pnpm codegen
+
+      - name: Run Tests
+        run: pnpm vitest run examples/${{ matrix.project }}/${{ matrix.project }}.test.ts

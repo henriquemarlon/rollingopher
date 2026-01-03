@@ -1,0 +1,84 @@
+# syntax=docker.io/docker/dockerfile:1
+ARG GOVERSION=1.24.1
+ARG ALPINE_VERSION=3.21
+ARG MACHINE_GUEST_TOOLS_VERSION=0.17.1-r1
+ARG MACHINE_ASSET_TOOLS_VERSION=0.1.0-alpha.2
+
+################################################################################
+# riscv64 base stage
+FROM --platform=linux/riscv64 alpine:${ALPINE_VERSION} AS base-riscv64
+
+ARG GOVERSION
+
+RUN apk add --no-cache ca-certificates curl
+
+RUN curl -fsSL https://go.dev/dl/go${GOVERSION}.linux-riscv64.tar.gz | \
+  tar -C /usr/local -xzf -
+
+ENV PATH="/usr/local/go/bin:${PATH}"
+
+################################################################################
+# cross build stage
+FROM base-riscv64 AS build-stage
+
+ARG MACHINE_GUEST_TOOLS_VERSION
+ARG MACHINE_ASSET_TOOLS_VERSION
+
+RUN apk add --no-cache build-base ca-certificates
+
+ADD --chmod=644 https://edubart.github.io/linux-packages/apk/keys/cartesi-apk-key.rsa.pub /etc/apk/keys/cartesi-apk-key.rsa.pub
+RUN echo "https://edubart.github.io/linux-packages/apk/stable" >> /etc/apk/repositories && \
+    apk update && \
+    apk add \
+        cartesi-machine-guest-tools=${MACHINE_GUEST_TOOLS_VERSION} \
+        cartesi-machine-guest-libcmt=${MACHINE_GUEST_TOOLS_VERSION} \
+        cartesi-machine-guest-libcmt-dev=${MACHINE_GUEST_TOOLS_VERSION}
+
+ADD https://github.com/Mugen-Builders/machine-asset-tools/releases/download/v${MACHINE_ASSET_TOOLS_VERSION}/machine-asset-tools_musl_riscv64_v${MACHINE_ASSET_TOOLS_VERSION}.tar.gz /tmp/
+RUN tar -xzf /tmp/machine-asset-tools_musl_riscv64_v${MACHINE_ASSET_TOOLS_VERSION}.tar.gz -C / && \
+    rm /tmp/machine-asset-tools_musl_riscv64_v${MACHINE_ASSET_TOOLS_VERSION}.tar.gz
+
+ADD https://github.com/Mugen-Builders/machine-asset-tools/releases/download/v${MACHINE_ASSET_TOOLS_VERSION}/machine-asset-tools_musl_riscv64_dev_v${MACHINE_ASSET_TOOLS_VERSION}.tar.gz /tmp/
+RUN tar -xzf /tmp/machine-asset-tools_musl_riscv64_dev_v${MACHINE_ASSET_TOOLS_VERSION}.tar.gz -C / && \
+    rm /tmp/machine-asset-tools_musl_riscv64_dev_v${MACHINE_ASSET_TOOLS_VERSION}.tar.gz
+
+WORKDIR /opt/build
+
+ENV GOOS=linux
+ENV GOARCH=riscv64
+ENV CGO_ENABLED=1
+ENV PATH=/usr/local/go/bin:${PATH}
+
+RUN --mount=type=cache,target=/go/pkg/mod/ \
+    --mount=type=bind,source=./go.sum,target=./go.sum \
+    --mount=type=bind,source=./go.mod,target=./go.mod \
+    go mod download -x
+
+RUN --mount=type=cache,target=/go/pkg/mod/ \
+    --mount=type=bind,target=. \
+    go build -o /bin/dapp ./examples/echo
+
+################################################################################
+# runtime stage: produces final image that will be executed
+FROM base-riscv64
+
+ARG MACHINE_GUEST_TOOLS_VERSION
+ARG MACHINE_ASSET_TOOLS_VERSION
+
+ADD --chmod=644 https://edubart.github.io/linux-packages/apk/keys/cartesi-apk-key.rsa.pub /etc/apk/keys/cartesi-apk-key.rsa.pub
+RUN echo "https://edubart.github.io/linux-packages/apk/stable" >> /etc/apk/repositories && \
+    apk update && \
+    apk add --no-cache \
+        cartesi-machine-guest-tools=${MACHINE_GUEST_TOOLS_VERSION} \
+        cartesi-machine-guest-libcmt=${MACHINE_GUEST_TOOLS_VERSION}
+
+ADD https://github.com/Mugen-Builders/machine-asset-tools/releases/download/v${MACHINE_ASSET_TOOLS_VERSION}/machine-asset-tools_musl_riscv64_v${MACHINE_ASSET_TOOLS_VERSION}.tar.gz /tmp/
+RUN tar -xzf /tmp/machine-asset-tools_musl_riscv64_v${MACHINE_ASSET_TOOLS_VERSION}.tar.gz -C / && \
+    rm /tmp/machine-asset-tools_musl_riscv64_v${MACHINE_ASSET_TOOLS_VERSION}.tar.gz
+
+ENV PATH="/opt/cartesi/bin:${PATH}"
+
+WORKDIR /opt/cartesi/dapp
+COPY --from=build-stage /bin/dapp .
+
+ENTRYPOINT ["/opt/cartesi/dapp/dapp"]

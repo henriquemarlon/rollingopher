@@ -36,21 +36,38 @@ func (r *Rollup) Close() error {
 	return nil
 }
 
+func (r *Rollup) EmitNotice(payload []byte) (uint64, error) {
+	var cPayload C.cmt_abi_bytes_t
+	if len(payload) > 0 {
+		cPayload.length = C.size_t(len(payload))
+		cPayload.data = C.CBytes(payload)
+		defer C.free(cPayload.data)
+	}
+
+	var index C.uint64_t
+	rc := C.cmt_rollup_emit_notice(&r.rollup, &cPayload, &index)
+	if rc != 0 {
+		return 0, fmt.Errorf("cmt_rollup_emit_notice failed: %d", rc)
+	}
+	return uint64(index), nil
+}
+
 func (r *Rollup) EmitVoucher(address common.Address, value *big.Int, data []byte) (uint64, error) {
 	var cAddress C.cmt_abi_address_t
-	copy(cAddress.data[:], address[:])
+	addrPtr := (*[20]byte)(unsafe.Pointer(&cAddress.data[0]))
+	copy(addrPtr[:], address[:])
 
 	var cValue C.cmt_abi_u256_t
-	valueBytes := value.Bytes()
-	if len(valueBytes) > 32 {
-		return 0, fmt.Errorf("value too large")
+	if value != nil {
+		valuePtr := (*[32]byte)(unsafe.Pointer(&cValue.data[0]))
+		value.FillBytes(valuePtr[:])
 	}
-	copy(cValue.data[32-len(valueBytes):], valueBytes)
 
 	var cData C.cmt_abi_bytes_t
 	if len(data) > 0 {
 		cData.length = C.size_t(len(data))
-		cData.data = unsafe.Pointer(&data[0])
+		cData.data = C.CBytes(data)
+		defer C.free(cData.data)
 	}
 
 	var index C.uint64_t
@@ -63,12 +80,14 @@ func (r *Rollup) EmitVoucher(address common.Address, value *big.Int, data []byte
 
 func (r *Rollup) EmitDelegateCallVoucher(address common.Address, data []byte) (uint64, error) {
 	var cAddress C.cmt_abi_address_t
-	copy(cAddress.data[:], address[:])
+	addrPtr := (*[20]byte)(unsafe.Pointer(&cAddress.data[0]))
+	copy(addrPtr[:], address[:])
 
 	var cData C.cmt_abi_bytes_t
 	if len(data) > 0 {
 		cData.length = C.size_t(len(data))
-		cData.data = unsafe.Pointer(&data[0])
+		cData.data = C.CBytes(data)
+		defer C.free(cData.data)
 	}
 
 	var index C.uint64_t
@@ -79,26 +98,12 @@ func (r *Rollup) EmitDelegateCallVoucher(address common.Address, data []byte) (u
 	return uint64(index), nil
 }
 
-func (r *Rollup) EmitNotice(payload []byte) (uint64, error) {
-	var cPayload C.cmt_abi_bytes_t
-	if len(payload) > 0 {
-		cPayload.length = C.size_t(len(payload))
-		cPayload.data = unsafe.Pointer(&payload[0])
-	}
-
-	var index C.uint64_t
-	rc := C.cmt_rollup_emit_notice(&r.rollup, &cPayload, &index)
-	if rc != 0 {
-		return 0, fmt.Errorf("cmt_rollup_emit_notice failed: %d", rc)
-	}
-	return uint64(index), nil
-}
-
 func (r *Rollup) EmitReport(payload []byte) error {
 	var cPayload C.cmt_abi_bytes_t
 	if len(payload) > 0 {
 		cPayload.length = C.size_t(len(payload))
-		cPayload.data = unsafe.Pointer(&payload[0])
+		cPayload.data = C.CBytes(payload)
+		defer C.free(cPayload.data)
 	}
 
 	rc := C.cmt_rollup_emit_report(&r.rollup, &cPayload)
@@ -112,7 +117,8 @@ func (r *Rollup) EmitException(payload []byte) error {
 	var cPayload C.cmt_abi_bytes_t
 	if len(payload) > 0 {
 		cPayload.length = C.size_t(len(payload))
-		cPayload.data = unsafe.Pointer(&payload[0])
+		cPayload.data = C.CBytes(payload)
+		defer C.free(cPayload.data)
 	}
 
 	rc := C.cmt_rollup_emit_exception(&r.rollup, &cPayload)
@@ -120,26 +126,6 @@ func (r *Rollup) EmitException(payload []byte) error {
 		return fmt.Errorf("cmt_rollup_emit_exception failed: %d", rc)
 	}
 	return nil
-}
-
-func (r *Rollup) Finish(accept bool) (RequestType, uint32, error) {
-	var finish C.cmt_rollup_finish_t
-	finish.accept_previous_request = C.bool(accept)
-
-	rc := C.cmt_rollup_finish(&r.rollup, &finish)
-	if rc != 0 {
-		return 0, 0, fmt.Errorf("cmt_rollup_finish failed: %d", rc)
-	}
-
-	var reqType RequestType
-	switch finish.next_request_type {
-	case 0:
-		reqType = RequestTypeAdvance
-	case 1:
-		reqType = RequestTypeInspect
-	}
-
-	return reqType, uint32(finish.next_request_payload_length), nil
 }
 
 func (r *Rollup) ReadAdvanceState() (*Advance, error) {
@@ -158,9 +144,14 @@ func (r *Rollup) ReadAdvanceState() (*Advance, error) {
 		},
 	}
 
-	copy(advance.AppContract[:], cAdvance.app_contract.data[:])
-	copy(advance.MsgSender[:], cAdvance.msg_sender.data[:])
-	copy(advance.PrevRandao[:], cAdvance.prev_randao.data[:])
+	appContractPtr := (*[20]byte)(unsafe.Pointer(&cAdvance.app_contract.data[0]))
+	copy(advance.AppContract[:], appContractPtr[:])
+
+	msgSenderPtr := (*[20]byte)(unsafe.Pointer(&cAdvance.msg_sender.data[0]))
+	copy(advance.MsgSender[:], msgSenderPtr[:])
+
+	prevRandaoPtr := (*[32]byte)(unsafe.Pointer(&cAdvance.prev_randao.data[0]))
+	copy(advance.PrevRandao[:], prevRandaoPtr[:])
 
 	if cAdvance.payload.length > 0 {
 		advance.Payload = C.GoBytes(cAdvance.payload.data, C.int(cAdvance.payload.length))
@@ -182,4 +173,24 @@ func (r *Rollup) ReadInspectState() (*Inspect, error) {
 	}
 
 	return inspect, nil
+}
+
+func (r *Rollup) Finish(accept bool) (RequestType, uint32, error) {
+	var finish C.cmt_rollup_finish_t
+	finish.accept_previous_request = C.bool(accept)
+
+	rc := C.cmt_rollup_finish(&r.rollup, &finish)
+	if rc != 0 {
+		return 0, 0, fmt.Errorf("cmt_rollup_finish failed: %d", rc)
+	}
+
+	var reqType RequestType
+	switch finish.next_request_type {
+	case 0:
+		reqType = RequestTypeAdvance
+	case 1:
+		reqType = RequestTypeInspect
+	}
+
+	return reqType, uint32(finish.next_request_payload_length), nil
 }

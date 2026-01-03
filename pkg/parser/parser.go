@@ -2,6 +2,7 @@ package parser
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"math/big"
 	"strings"
 
@@ -10,10 +11,6 @@ import (
 	"github.com/henriquemarlon/rollingopher/pkg/rollup"
 )
 
-// -----------------------------------------------------------------------------
-// Portals
-// -----------------------------------------------------------------------------
-
 var (
 	EtherPortal         = common.HexToAddress("0xFfdbe43d4c855BF7e0f105c400A50857f53AB044")
 	ERC20Portal         = common.HexToAddress("0x9C21AEb2093C32DDbC53eEF24B873BDCd1aDa1DB")
@@ -21,10 +18,6 @@ var (
 	ERC1155SinglePortal = common.HexToAddress("0x7CFB0193Ca87eB6e48056885E026552c3A941FC4")
 	ERC1155BatchPortal  = common.HexToAddress("0xedB53860A6B52bbb7561Ad596416ee9965B055Aa")
 )
-
-// -----------------------------------------------------------------------------
-// Selectors
-// -----------------------------------------------------------------------------
 
 const (
 	SelectorWithdrawEther         uint32 = 0x8cf70f0b
@@ -44,10 +37,6 @@ const (
 	SelectorERC1155SafeTransferFrom  uint32 = 0xf242432a
 	SelectorERC1155SafeBatchTransfer uint32 = 0x2eb2c2d6
 )
-
-// -----------------------------------------------------------------------------
-// ABI
-// -----------------------------------------------------------------------------
 
 var (
 	erc20ABI   abi.ABI
@@ -117,10 +106,6 @@ const erc1155ABIJson = `[
 		]
 	}
 ]`
-
-// -----------------------------------------------------------------------------
-// Decode Advance/Inspect
-// -----------------------------------------------------------------------------
 
 func DecodeAdvance(advance *rollup.Advance) (interface{}, InputType, error) {
 	sender := advance.MsgSender
@@ -204,22 +189,88 @@ func decodeBySelector(payload []byte) (interface{}, InputType, error) {
 	}
 }
 
-func DecodeInspect(inspect *rollup.Inspect, queryType InputType) (interface{}, InputType, error) {
-	switch queryType {
-	case InputTypeBalance, InputTypeBalanceAccount, InputTypeBalanceAccountTokenAddress, InputTypeBalanceAccountTokenAddressID:
-		return DecodeBalanceQuery(inspect.Payload)
+func DecodeInspect(inspect *rollup.Inspect) (interface{}, InputType, error) {
+	var req struct {
+		Method string   `json:"method"`
+		Params []string `json:"params"`
+	}
 
-	case InputTypeSupply, InputTypeSupplyTokenAddress, InputTypeSupplyTokenAddressID:
-		return DecodeSupplyQuery(inspect.Payload)
+	if err := json.Unmarshal(inspect.Payload, &req); err != nil {
+		return nil, InputTypeNone, ErrMalformedInput
+	}
 
+	switch req.Method {
+	case "ledger_getBalance":
+		return decodeBalanceJSON(req.Params)
+	case "ledger_getTotalSupply":
+		return decodeSupplyJSON(req.Params)
 	default:
 		return nil, InputTypeNone, ErrUnknownInputType
 	}
 }
 
-// -----------------------------------------------------------------------------
-// Decode Deposits
-// -----------------------------------------------------------------------------
+func decodeBalanceJSON(params []string) (*BalanceQuery, InputType, error) {
+	query := &BalanceQuery{}
+
+	if len(params) == 0 || len(params) > 4 {
+		return nil, InputTypeNone, ErrMalformedInput
+	}
+
+	account := common.HexToHash(params[0])
+	query.Account = account
+
+	if len(params) == 1 {
+		return query, InputTypeBalanceAccount, nil
+	}
+
+	query.Token = common.HexToAddress(params[1])
+
+	if len(params) == 2 {
+		return query, InputTypeBalanceAccountTokenAddress, nil
+	}
+
+	tokenID, ok := new(big.Int).SetString(params[2], 0)
+	if !ok {
+		return nil, InputTypeNone, ErrMalformedInput
+	}
+	query.TokenID = tokenID
+
+	if len(params) == 4 {
+		query.ExecLayerData = []byte(params[3])
+	}
+
+	return query, InputTypeBalanceAccountTokenAddressID, nil
+}
+
+func decodeSupplyJSON(params []string) (*SupplyQuery, InputType, error) {
+	query := &SupplyQuery{}
+
+	if len(params) == 0 {
+		return query, InputTypeSupply, nil
+	}
+
+	if len(params) > 3 {
+		return nil, InputTypeNone, ErrMalformedInput
+	}
+
+	query.Token = common.HexToAddress(params[0])
+
+	if len(params) == 1 {
+		return query, InputTypeSupplyTokenAddress, nil
+	}
+
+	tokenID, ok := new(big.Int).SetString(params[1], 0)
+	if !ok {
+		return nil, InputTypeNone, ErrMalformedInput
+	}
+	query.TokenID = tokenID
+
+	if len(params) == 3 {
+		query.ExecLayerData = []byte(params[2])
+	}
+
+	return query, InputTypeSupplyTokenAddressID, nil
+}
 
 func DecodeEtherDeposit(payload []byte) (*EtherDeposit, error) {
 	if len(payload) < 52 {
@@ -240,23 +291,19 @@ func DecodeEtherDeposit(payload []byte) (*EtherDeposit, error) {
 }
 
 func DecodeERC20Deposit(payload []byte) (*ERC20Deposit, error) {
-	if len(payload) < 73 {
+	if len(payload) < 72 {
 		return nil, ErrMalformedInput
 	}
 
-	if payload[0] == 0 {
-		return nil, ErrDepositFailed
-	}
-
 	deposit := &ERC20Deposit{
-		Token:  common.BytesToAddress(payload[1:21]),
-		Sender: common.BytesToAddress(payload[21:41]),
-		Amount: new(big.Int).SetBytes(payload[41:73]),
+		Token:  common.BytesToAddress(payload[0:20]),
+		Sender: common.BytesToAddress(payload[20:40]),
+		Amount: new(big.Int).SetBytes(payload[40:72]),
 	}
 
-	if len(payload) > 73 {
-		deposit.ExecLayerData = make([]byte, len(payload)-73)
-		copy(deposit.ExecLayerData, payload[73:])
+	if len(payload) > 72 {
+		deposit.ExecLayerData = make([]byte, len(payload)-72)
+		copy(deposit.ExecLayerData, payload[72:])
 	}
 
 	return deposit, nil
@@ -312,7 +359,7 @@ func DecodeERC1155BatchDeposit(payload []byte) (*ERC1155BatchDeposit, error) {
 	}
 
 	offset := 40
-	idsOffset := new(big.Int).SetBytes(payload[offset : offset+32]).Uint64()
+	idsOffset := new(big.Int).SetBytes(payload[offset:offset+32]).Uint64() + 40
 	offset += 32
 
 	if len(payload) < int(idsOffset)+32 {
@@ -332,7 +379,7 @@ func DecodeERC1155BatchDeposit(payload []byte) (*ERC1155BatchDeposit, error) {
 		deposit.TokenIDs[i] = new(big.Int).SetBytes(payload[start : start+32])
 	}
 
-	amountsOffset := new(big.Int).SetBytes(payload[offset : offset+32]).Uint64()
+	amountsOffset := new(big.Int).SetBytes(payload[offset:offset+32]).Uint64() + 40
 	offset += 32
 
 	if len(payload) < int(amountsOffset)+32 {
@@ -377,10 +424,6 @@ func DecodeERC1155BatchDeposit(payload []byte) (*ERC1155BatchDeposit, error) {
 
 	return deposit, nil
 }
-
-// -----------------------------------------------------------------------------
-// Decode Withdrawals
-// -----------------------------------------------------------------------------
 
 func DecodeEtherWithdrawal(payload []byte) (*EtherWithdrawal, error) {
 	if len(payload) < 36 {
@@ -489,7 +532,7 @@ func DecodeERC1155BatchWithdrawal(payload []byte) (*ERC1155BatchWithdrawal, erro
 	}
 
 	offset := 36
-	idsOffset := new(big.Int).SetBytes(payload[offset : offset+32]).Uint64()
+	idsOffset := new(big.Int).SetBytes(payload[offset:offset+32]).Uint64() + 4
 	offset += 32
 
 	if len(payload) < int(idsOffset)+32 {
@@ -509,7 +552,7 @@ func DecodeERC1155BatchWithdrawal(payload []byte) (*ERC1155BatchWithdrawal, erro
 		withdrawal.TokenIDs[i] = new(big.Int).SetBytes(payload[start : start+32])
 	}
 
-	amountsOffset := new(big.Int).SetBytes(payload[offset : offset+32]).Uint64()
+	amountsOffset := new(big.Int).SetBytes(payload[offset:offset+32]).Uint64() + 4
 	offset += 32
 
 	if len(payload) < int(amountsOffset)+32 {
@@ -531,10 +574,6 @@ func DecodeERC1155BatchWithdrawal(payload []byte) (*ERC1155BatchWithdrawal, erro
 
 	return withdrawal, nil
 }
-
-// -----------------------------------------------------------------------------
-// Decode Transfers
-// -----------------------------------------------------------------------------
 
 func DecodeEtherTransfer(payload []byte) (*EtherTransfer, error) {
 	if len(payload) < 68 {
@@ -648,7 +687,7 @@ func DecodeERC1155BatchTransfer(payload []byte) (*ERC1155BatchTransfer, error) {
 	}
 
 	offset := 68
-	idsOffset := new(big.Int).SetBytes(payload[offset : offset+32]).Uint64()
+	idsOffset := new(big.Int).SetBytes(payload[offset:offset+32]).Uint64() + 4
 	offset += 32
 
 	if len(payload) < int(idsOffset)+32 {
@@ -668,7 +707,7 @@ func DecodeERC1155BatchTransfer(payload []byte) (*ERC1155BatchTransfer, error) {
 		transfer.TokenIDs[i] = new(big.Int).SetBytes(payload[start : start+32])
 	}
 
-	amountsOffset := new(big.Int).SetBytes(payload[offset : offset+32]).Uint64()
+	amountsOffset := new(big.Int).SetBytes(payload[offset:offset+32]).Uint64() + 4
 
 	if len(payload) < int(amountsOffset)+32 {
 		return nil, ErrMalformedInput
@@ -689,10 +728,6 @@ func DecodeERC1155BatchTransfer(payload []byte) (*ERC1155BatchTransfer, error) {
 
 	return transfer, nil
 }
-
-// -----------------------------------------------------------------------------
-// Decode Inspect Queries
-// -----------------------------------------------------------------------------
 
 func DecodeBalanceQuery(payload []byte) (*BalanceQuery, InputType, error) {
 	query := &BalanceQuery{}
@@ -750,15 +785,11 @@ func DecodeSupplyQuery(payload []byte) (*SupplyQuery, InputType, error) {
 	}
 }
 
-// -----------------------------------------------------------------------------
-// Encode Vouchers
-// -----------------------------------------------------------------------------
-
 func EncodeEtherVoucher(receiver common.Address, amount *big.Int) *Voucher {
 	return &Voucher{
-		Address: receiver,
-		Value:   amount,
-		Payload: nil,
+		Destination: receiver,
+		Value:       amount,
+		Payload:     nil,
 	}
 }
 
@@ -768,9 +799,9 @@ func EncodeERC20Voucher(token, receiver common.Address, amount *big.Int) (*Vouch
 		return nil, err
 	}
 	return &Voucher{
-		Address: token,
-		Value:   big.NewInt(0),
-		Payload: payload,
+		Destination: token,
+		Value:       big.NewInt(0),
+		Payload:     payload,
 	}, nil
 }
 
@@ -780,9 +811,9 @@ func EncodeERC721Voucher(token, appAddress, receiver common.Address, tokenID *bi
 		return nil, err
 	}
 	return &Voucher{
-		Address: token,
-		Value:   big.NewInt(0),
-		Payload: payload,
+		Destination: token,
+		Value:       big.NewInt(0),
+		Payload:     payload,
 	}, nil
 }
 
@@ -792,9 +823,9 @@ func EncodeERC1155SingleVoucher(token, appAddress, receiver common.Address, toke
 		return nil, err
 	}
 	return &Voucher{
-		Address: token,
-		Value:   big.NewInt(0),
-		Payload: payload,
+		Destination: token,
+		Value:       big.NewInt(0),
+		Payload:     payload,
 	}, nil
 }
 
@@ -804,15 +835,15 @@ func EncodeERC1155BatchVoucher(token, appAddress, receiver common.Address, token
 		return nil, err
 	}
 	return &Voucher{
-		Address: token,
-		Value:   big.NewInt(0),
-		Payload: payload,
+		Destination: token,
+		Value:       big.NewInt(0),
+		Payload:     payload,
 	}, nil
 }
 
 func EncodeDelegateCallVoucher(target common.Address, payload []byte) *DelegateCallVoucher {
 	return &DelegateCallVoucher{
-		Address: target,
-		Payload: payload,
+		Destination: target,
+		Payload:     payload,
 	}
 }

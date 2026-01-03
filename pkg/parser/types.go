@@ -6,6 +6,29 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
+// Outputs
+
+type Notice struct {
+	Payload []byte
+}
+
+type Voucher struct {
+	Destination common.Address
+	Value       *big.Int
+	Payload     []byte
+}
+
+type Report struct {
+	Payload []byte
+}
+
+type DelegateCallVoucher struct {
+	Destination common.Address
+	Payload     []byte
+}
+
+// Ledger
+
 type InputType int
 
 const (
@@ -149,15 +172,4 @@ type SupplyQuery struct {
 	Token         common.Address
 	TokenID       *big.Int
 	ExecLayerData []byte
-}
-
-type Voucher struct {
-	Address common.Address
-	Value   *big.Int
-	Payload []byte
-}
-
-type DelegateCallVoucher struct {
-	Address common.Address
-	Payload []byte
 }

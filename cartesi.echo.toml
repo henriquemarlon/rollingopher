@@ -1,0 +1,9 @@
+[drives.root]
+builder = "docker"
+dockerfile = "build/Dockerfile.echo"
+format = "ext2"
+
+[drives.data]
+builder = "empty"
+user = "dapp"
+size = "100Mb"

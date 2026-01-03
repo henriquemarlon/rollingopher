@@ -12,4 +12,5 @@ var (
 	ErrBalanceOverflow   = errors.New("balance overflow")
 	ErrInvalidAccount    = errors.New("invalid account")
 	ErrInsertionError    = errors.New("insertion error")
+	ErrInvalidAmount     = errors.New("invalid amount")
 )

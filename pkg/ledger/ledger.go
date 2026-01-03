@@ -13,6 +13,7 @@ import "C"
 import (
 	"fmt"
 	"math/big"
+	"unsafe"
 
 	"github.com/ethereum/go-ethereum/common"
 )
@@ -46,20 +47,21 @@ func (l *Ledger) Reset() error {
 	return nil
 }
 
+// TODO: func (l *Ledger) Load(filepath string) error
+// TODO: func (l *Ledger) Save(filepath string) error
+
 func (l *Ledger) RetrieveAsset(tokenAddress common.Address, tokenID *big.Int, assetType AssetType, op RetrieveOperation) (AssetID, error) {
 	var cAssetID C.cma_ledger_asset_id_t
 	var cTokenAddress C.cma_token_address_t
 	var cTokenID C.cma_token_id_t
 	var cAssetType C.cma_ledger_asset_type_t
 
-	copy(cTokenAddress[:], tokenAddress[:])
+	addrPtr := (*[20]byte)(unsafe.Pointer(&cTokenAddress))
+	copy(addrPtr[:], tokenAddress[:])
 
 	if tokenID != nil {
-		tokenIDBytes := tokenID.Bytes()
-		if len(tokenIDBytes) > 32 {
-			return 0, fmt.Errorf("tokenID too large")
-		}
-		copy(cTokenID[32-len(tokenIDBytes):], tokenIDBytes)
+		idPtr := (*[32]byte)(unsafe.Pointer(&cTokenID))
+		tokenID.FillBytes(idPtr[:])
 	}
 
 	cAssetType = C.cma_ledger_asset_type_t(assetType)
@@ -83,8 +85,8 @@ func (l *Ledger) RetrieveAccountByAddress(address common.Address, op RetrieveOpe
 	var cAccount C.cma_ledger_account_t
 	var cAccountType C.cma_ledger_account_type_t = C.CMA_LEDGER_ACCOUNT_TYPE_WALLET_ADDRESS
 
-	copy(cAccount.address[:], address[:])
-	cAccount._type = C.CMA_LEDGER_ACCOUNT_TYPE_WALLET_ADDRESS
+	accountPtr := (*[20]byte)(unsafe.Pointer(&cAccount))
+	copy(accountPtr[:], address[:])
 
 	rc := C.cma_ledger_retrieve_account(
 		&l.ledger,
@@ -105,8 +107,8 @@ func (l *Ledger) RetrieveAccountByID(accountID common.Hash, op RetrieveOperation
 	var cAccount C.cma_ledger_account_t
 	var cAccountType C.cma_ledger_account_type_t = C.CMA_LEDGER_ACCOUNT_TYPE_ACCOUNT_ID
 
-	copy(cAccount.account_id[:], accountID[:])
-	cAccount._type = C.CMA_LEDGER_ACCOUNT_TYPE_ACCOUNT_ID
+	accountPtr := (*[32]byte)(unsafe.Pointer(&cAccount))
+	copy(accountPtr[:], accountID[:])
 
 	rc := C.cma_ledger_retrieve_account(
 		&l.ledger,
@@ -123,12 +125,12 @@ func (l *Ledger) RetrieveAccountByID(accountID common.Hash, op RetrieveOperation
 }
 
 func (l *Ledger) Deposit(assetID AssetID, accountID InternalAccountID, amount *big.Int) error {
-	var cAmount C.cma_amount_t
-	amountBytes := amount.Bytes()
-	if len(amountBytes) > 32 {
-		return fmt.Errorf("amount too large")
+	if amount == nil {
+		return ErrInvalidAmount
 	}
-	copy(cAmount[32-len(amountBytes):], amountBytes)
+	var cAmount C.cma_amount_t
+	amountPtr := (*[32]byte)(unsafe.Pointer(&cAmount))
+	amount.FillBytes(amountPtr[:])
 
 	rc := C.cma_ledger_deposit(
 		&l.ledger,
@@ -143,12 +145,12 @@ func (l *Ledger) Deposit(assetID AssetID, accountID InternalAccountID, amount *b
 }
 
 func (l *Ledger) Withdraw(assetID AssetID, accountID InternalAccountID, amount *big.Int) error {
-	var cAmount C.cma_amount_t
-	amountBytes := amount.Bytes()
-	if len(amountBytes) > 32 {
-		return fmt.Errorf("amount too large")
+	if amount == nil {
+		return ErrInvalidAmount
 	}
-	copy(cAmount[32-len(amountBytes):], amountBytes)
+	var cAmount C.cma_amount_t
+	amountPtr := (*[32]byte)(unsafe.Pointer(&cAmount))
+	amount.FillBytes(amountPtr[:])
 
 	rc := C.cma_ledger_withdraw(
 		&l.ledger,
@@ -163,12 +165,12 @@ func (l *Ledger) Withdraw(assetID AssetID, accountID InternalAccountID, amount *
 }
 
 func (l *Ledger) Transfer(assetID AssetID, from, to InternalAccountID, amount *big.Int) error {
-	var cAmount C.cma_amount_t
-	amountBytes := amount.Bytes()
-	if len(amountBytes) > 32 {
-		return fmt.Errorf("amount too large")
+	if amount == nil {
+		return ErrInvalidAmount
 	}
-	copy(cAmount[32-len(amountBytes):], amountBytes)
+	var cAmount C.cma_amount_t
+	amountPtr := (*[32]byte)(unsafe.Pointer(&cAmount))
+	amount.FillBytes(amountPtr[:])
 
 	rc := C.cma_ledger_transfer(
 		&l.ledger,
@@ -196,7 +198,8 @@ func (l *Ledger) GetBalance(assetID AssetID, accountID InternalAccountID) (*big.
 		return nil, mapError(rc)
 	}
 
-	return new(big.Int).SetBytes(cBalance[:]), nil
+	balancePtr := (*[32]byte)(unsafe.Pointer(&cBalance))
+	return new(big.Int).SetBytes(balancePtr[:]), nil
 }
 
 func (l *Ledger) GetTotalSupply(assetID AssetID) (*big.Int, error) {
@@ -211,7 +214,8 @@ func (l *Ledger) GetTotalSupply(assetID AssetID) (*big.Int, error) {
 		return nil, mapError(rc)
 	}
 
-	return new(big.Int).SetBytes(cSupply[:]), nil
+	supplyPtr := (*[32]byte)(unsafe.Pointer(&cSupply))
+	return new(big.Int).SetBytes(supplyPtr[:]), nil
 }
 
 func mapError(rc C.int) error {
