@@ -8,15 +8,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/henriquemarlon/rollingopher/pkg/rollup"
-)
-
-var (
-	EtherPortal         = common.HexToAddress("0xFfdbe43d4c855BF7e0f105c400A50857f53AB044")
-	ERC20Portal         = common.HexToAddress("0x9C21AEb2093C32DDbC53eEF24B873BDCd1aDa1DB")
-	ERC721Portal        = common.HexToAddress("0x237F8DD094C0e47f4236f12b4Fa01d6Dae89fb87")
-	ERC1155SinglePortal = common.HexToAddress("0x7CFB0193Ca87eB6e48056885E026552c3A941FC4")
-	ERC1155BatchPortal  = common.HexToAddress("0xedB53860A6B52bbb7561Ad596416ee9965B055Aa")
 )
 
 const (
@@ -107,95 +98,111 @@ const erc1155ABIJson = `[
 	}
 ]`
 
-func DecodeAdvance(advance *rollup.Advance) (interface{}, InputType, error) {
-	sender := advance.MsgSender
+func DecodeAdvance(inputType InputType, payload []byte) (interface{}, error) {
+	switch inputType {
+	case InputTypeAuto:
+		return DecodeAdvanceAuto(payload)
 
-	switch sender {
-	case EtherPortal:
-		deposit, err := DecodeEtherDeposit(advance.Payload)
-		return deposit, InputTypeEtherDeposit, err
+	case InputTypeEtherDeposit:
+		return DecodeEtherDeposit(payload)
 
-	case ERC20Portal:
-		deposit, err := DecodeERC20Deposit(advance.Payload)
-		return deposit, InputTypeERC20Deposit, err
+	case InputTypeERC20Deposit:
+		return DecodeERC20Deposit(payload)
 
-	case ERC721Portal:
-		deposit, err := DecodeERC721Deposit(advance.Payload)
-		return deposit, InputTypeERC721Deposit, err
+	case InputTypeERC721Deposit:
+		return DecodeERC721Deposit(payload)
 
-	case ERC1155SinglePortal:
-		deposit, err := DecodeERC1155SingleDeposit(advance.Payload)
-		return deposit, InputTypeERC1155SingleDeposit, err
+	case InputTypeERC1155SingleDeposit:
+		return DecodeERC1155SingleDeposit(payload)
 
-	case ERC1155BatchPortal:
-		deposit, err := DecodeERC1155BatchDeposit(advance.Payload)
-		return deposit, InputTypeERC1155BatchDeposit, err
+	case InputTypeERC1155BatchDeposit:
+		return DecodeERC1155BatchDeposit(payload)
+
+	case InputTypeEtherWithdrawal:
+		return DecodeEtherWithdrawal(payload)
+
+	case InputTypeERC20Withdrawal:
+		return DecodeERC20Withdrawal(payload)
+
+	case InputTypeERC721Withdrawal:
+		return DecodeERC721Withdrawal(payload)
+
+	case InputTypeERC1155SingleWithdrawal:
+		return DecodeERC1155SingleWithdrawal(payload)
+
+	case InputTypeERC1155BatchWithdrawal:
+		return DecodeERC1155BatchWithdrawal(payload)
+
+	case InputTypeEtherTransfer:
+		return DecodeEtherTransfer(payload)
+
+	case InputTypeERC20Transfer:
+		return DecodeERC20Transfer(payload)
+
+	case InputTypeERC721Transfer:
+		return DecodeERC721Transfer(payload)
+
+	case InputTypeERC1155SingleTransfer:
+		return DecodeERC1155SingleTransfer(payload)
+
+	case InputTypeERC1155BatchTransfer:
+		return DecodeERC1155BatchTransfer(payload)
 
 	default:
-		return decodeBySelector(advance.Payload)
+		return nil, ErrUnknownInputType
 	}
 }
 
-func decodeBySelector(payload []byte) (interface{}, InputType, error) {
+func DecodeAdvanceAuto(payload []byte) (interface{}, error) {
 	if len(payload) < 4 {
-		return nil, InputTypeNone, ErrMalformedInput
+		return nil, ErrMalformedInput
 	}
 
 	selector := binary.BigEndian.Uint32(payload[0:4])
 
 	switch selector {
 	case SelectorWithdrawEther:
-		withdrawal, err := DecodeEtherWithdrawal(payload)
-		return withdrawal, InputTypeEtherWithdrawal, err
+		return DecodeEtherWithdrawal(payload)
 
 	case SelectorWithdrawERC20:
-		withdrawal, err := DecodeERC20Withdrawal(payload)
-		return withdrawal, InputTypeERC20Withdrawal, err
+		return DecodeERC20Withdrawal(payload)
 
 	case SelectorWithdrawERC721:
-		withdrawal, err := DecodeERC721Withdrawal(payload)
-		return withdrawal, InputTypeERC721Withdrawal, err
+		return DecodeERC721Withdrawal(payload)
 
 	case SelectorWithdrawERC1155Single:
-		withdrawal, err := DecodeERC1155SingleWithdrawal(payload)
-		return withdrawal, InputTypeERC1155SingleWithdrawal, err
+		return DecodeERC1155SingleWithdrawal(payload)
 
 	case SelectorWithdrawERC1155Batch:
-		withdrawal, err := DecodeERC1155BatchWithdrawal(payload)
-		return withdrawal, InputTypeERC1155BatchWithdrawal, err
+		return DecodeERC1155BatchWithdrawal(payload)
 
 	case SelectorTransferEther:
-		transfer, err := DecodeEtherTransfer(payload)
-		return transfer, InputTypeEtherTransfer, err
+		return DecodeEtherTransfer(payload)
 
 	case SelectorTransferERC20:
-		transfer, err := DecodeERC20Transfer(payload)
-		return transfer, InputTypeERC20Transfer, err
+		return DecodeERC20Transfer(payload)
 
 	case SelectorTransferERC721:
-		transfer, err := DecodeERC721Transfer(payload)
-		return transfer, InputTypeERC721Transfer, err
+		return DecodeERC721Transfer(payload)
 
 	case SelectorTransferERC1155Single:
-		transfer, err := DecodeERC1155SingleTransfer(payload)
-		return transfer, InputTypeERC1155SingleTransfer, err
+		return DecodeERC1155SingleTransfer(payload)
 
 	case SelectorTransferERC1155Batch:
-		transfer, err := DecodeERC1155BatchTransfer(payload)
-		return transfer, InputTypeERC1155BatchTransfer, err
+		return DecodeERC1155BatchTransfer(payload)
 
 	default:
-		return nil, InputTypeNone, ErrUnknownInputType
+		return nil, ErrUnknownInputType
 	}
 }
 
-func DecodeInspect(inspect *rollup.Inspect) (interface{}, InputType, error) {
+func DecodeInspect(payload []byte) (interface{}, InputType, error) {
 	var req struct {
 		Method string   `json:"method"`
 		Params []string `json:"params"`
 	}
 
-	if err := json.Unmarshal(inspect.Payload, &req); err != nil {
+	if err := json.Unmarshal(payload, &req); err != nil {
 		return nil, InputTypeNone, ErrMalformedInput
 	}
 

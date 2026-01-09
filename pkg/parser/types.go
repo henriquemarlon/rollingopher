@@ -33,6 +33,7 @@ type InputType int
 
 const (
 	InputTypeNone InputType = iota
+	InputTypeAuto
 	InputTypeEtherDeposit
 	InputTypeERC20Deposit
 	InputTypeERC721Deposit

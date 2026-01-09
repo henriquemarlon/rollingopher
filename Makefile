@@ -16,14 +16,14 @@ build-handling-assets: ## Build the handling-assets example
 	$(END_LOG)
 
 .PHONY: test-echo
-test-echo: build-echo ## Run the echo tests
+test-echo: ## Run the echo tests
 	$(START_LOG)
 	@pnpm install
 	@pnpm vitest run examples/echo/echo.test.ts
 	$(END_LOG)
 
 .PHONY: test-handling-assets
-test-handling-assets: build-handling-assets ## Run the handling-assets tests
+test-handling-assets: ## Run the handling-assets tests
 	$(START_LOG)
 	@pnpm install
 	@pnpm vitest run examples/handling-assets/handling-assets.test.ts

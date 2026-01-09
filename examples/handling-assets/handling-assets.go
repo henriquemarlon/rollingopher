@@ -10,6 +10,14 @@ import (
 	"github.com/henriquemarlon/rollingopher/pkg/rollup"
 )
 
+var (
+	EtherPortal         = common.HexToAddress("0xFfdbe43d4c855BF7e0f105c400A50857f53AB044")
+	ERC20Portal         = common.HexToAddress("0x9C21AEb2093C32DDbC53eEF24B873BDCd1aDa1DB")
+	ERC721Portal        = common.HexToAddress("0x237F8DD094C0e47f4236f12b4Fa01d6Dae89fb87")
+	ERC1155SinglePortal = common.HexToAddress("0x7CFB0193Ca87eB6e48056885E026552c3A941FC4")
+	ERC1155BatchPortal  = common.HexToAddress("0xedB53860A6B52bbb7561Ad596416ee9965B055Aa")
+)
+
 var etherAssetID ledger.AssetID
 
 func handleAdvance(r *rollup.Rollup, l *ledger.Ledger) bool {
@@ -22,125 +30,124 @@ func handleAdvance(r *rollup.Rollup, l *ledger.Ledger) bool {
 	msgSender := advance.MsgSender
 	log.Printf("[handling-assets] Received advance from %s", msgSender.Hex())
 
-	decodedInput, inputType, err := parser.DecodeAdvance(advance)
+	var inputType parser.InputType
+	switch msgSender {
+	case EtherPortal:
+		inputType = parser.InputTypeEtherDeposit
+	case ERC20Portal:
+		inputType = parser.InputTypeERC20Deposit
+	case ERC721Portal:
+		inputType = parser.InputTypeERC721Deposit
+	case ERC1155SinglePortal:
+		inputType = parser.InputTypeERC1155SingleDeposit
+	case ERC1155BatchPortal:
+		inputType = parser.InputTypeERC1155BatchDeposit
+	default:
+		inputType = parser.InputTypeAuto
+	}
+
+	decodedInput, err := parser.DecodeAdvance(inputType, advance.Payload)
 	if err != nil {
 		log.Printf("[handling-assets] failed to decode: %v", err)
 		return false
 	}
 
-	switch inputType {
+	switch d := decodedInput.(type) {
 	// Ether
-	case parser.InputTypeEtherDeposit:
-		d := decodedInput.(*parser.EtherDeposit)
+	case *parser.EtherDeposit:
 		accountID, _ := l.RetrieveAccountByAddress(d.Sender, ledger.RetrieveOperationFindOrCreate)
 		l.Deposit(etherAssetID, accountID, d.Amount)
 		log.Printf("[handling-assets] %s deposited %s ether", d.Sender.Hex(), d.Amount)
 		return true
 
-	case parser.InputTypeEtherWithdrawal:
-		w := decodedInput.(*parser.EtherWithdrawal)
+	case *parser.EtherWithdrawal:
 		accountID, _ := l.RetrieveAccountByAddress(msgSender, ledger.RetrieveOperationFind)
-		l.Withdraw(etherAssetID, accountID, w.Amount)
-		v := parser.EncodeEtherVoucher(msgSender, w.Amount)
+		l.Withdraw(etherAssetID, accountID, d.Amount)
+		v := parser.EncodeEtherVoucher(msgSender, d.Amount)
 		r.EmitVoucher(v.Destination, v.Value, v.Payload)
-		log.Printf("[handling-assets] %s withdrew %s ether", msgSender.Hex(), w.Amount)
+		log.Printf("[handling-assets] %s withdrew %s ether", msgSender.Hex(), d.Amount)
 		return true
 
-	case parser.InputTypeEtherTransfer:
-		t := decodedInput.(*parser.EtherTransfer)
+	case *parser.EtherTransfer:
 		fromID, _ := l.RetrieveAccountByAddress(msgSender, ledger.RetrieveOperationFind)
-		toID, _ := l.RetrieveAccountByID(t.Receiver, ledger.RetrieveOperationFindOrCreate)
-		l.Transfer(etherAssetID, fromID, toID, t.Amount)
-		log.Printf("[handling-assets] %s transferred %s ether to %s", msgSender.Hex(), t.Amount, t.Receiver.Hex())
+		toID, _ := l.RetrieveAccountByID(d.Receiver, ledger.RetrieveOperationFindOrCreate)
+		l.Transfer(etherAssetID, fromID, toID, d.Amount)
+		log.Printf("[handling-assets] %s transferred %s ether to %s", msgSender.Hex(), d.Amount, d.Receiver.Hex())
 		return true
 
-	// ERC20
-	case parser.InputTypeERC20Deposit:
-		d := decodedInput.(*parser.ERC20Deposit)
+	case *parser.ERC20Deposit:
 		assetID, _ := l.RetrieveAsset(d.Token, nil, ledger.AssetTypeTokenAddress, ledger.RetrieveOperationFindOrCreate)
 		accountID, _ := l.RetrieveAccountByAddress(d.Sender, ledger.RetrieveOperationFindOrCreate)
 		l.Deposit(assetID, accountID, d.Amount)
 		log.Printf("[handling-assets] %s deposited %s of %s", d.Sender.Hex(), d.Amount, d.Token.Hex())
 		return true
 
-	case parser.InputTypeERC20Withdrawal:
-		w := decodedInput.(*parser.ERC20Withdrawal)
-		assetID, _ := l.RetrieveAsset(w.Token, nil, ledger.AssetTypeTokenAddress, ledger.RetrieveOperationFind)
+	case *parser.ERC20Withdrawal:
+		assetID, _ := l.RetrieveAsset(d.Token, nil, ledger.AssetTypeTokenAddress, ledger.RetrieveOperationFind)
 		accountID, _ := l.RetrieveAccountByAddress(msgSender, ledger.RetrieveOperationFind)
-		l.Withdraw(assetID, accountID, w.Amount)
-		v, _ := parser.EncodeERC20Voucher(w.Token, msgSender, w.Amount)
+		l.Withdraw(assetID, accountID, d.Amount)
+		v, _ := parser.EncodeERC20Voucher(d.Token, msgSender, d.Amount)
 		r.EmitVoucher(v.Destination, v.Value, v.Payload)
-		log.Printf("[handling-assets] %s withdrew %s of %s", msgSender.Hex(), w.Amount, w.Token.Hex())
+		log.Printf("[handling-assets] %s withdrew %s of %s", msgSender.Hex(), d.Amount, d.Token.Hex())
 		return true
 
-	case parser.InputTypeERC20Transfer:
-		t := decodedInput.(*parser.ERC20Transfer)
-		assetID, _ := l.RetrieveAsset(t.Token, nil, ledger.AssetTypeTokenAddress, ledger.RetrieveOperationFind)
+	case *parser.ERC20Transfer:
+		assetID, _ := l.RetrieveAsset(d.Token, nil, ledger.AssetTypeTokenAddress, ledger.RetrieveOperationFind)
 		fromID, _ := l.RetrieveAccountByAddress(msgSender, ledger.RetrieveOperationFind)
-		toID, _ := l.RetrieveAccountByID(t.Receiver, ledger.RetrieveOperationFindOrCreate)
-		l.Transfer(assetID, fromID, toID, t.Amount)
-		log.Printf("[handling-assets] %s transferred %s of %s to %s", msgSender.Hex(), t.Amount, t.Token.Hex(), t.Receiver.Hex())
+		toID, _ := l.RetrieveAccountByID(d.Receiver, ledger.RetrieveOperationFindOrCreate)
+		l.Transfer(assetID, fromID, toID, d.Amount)
+		log.Printf("[handling-assets] %s transferred %s of %s to %s", msgSender.Hex(), d.Amount, d.Token.Hex(), d.Receiver.Hex())
 		return true
 
-	// ERC721
-	case parser.InputTypeERC721Deposit:
-		d := decodedInput.(*parser.ERC721Deposit)
+	case *parser.ERC721Deposit:
 		assetID, _ := l.RetrieveAsset(d.Token, d.TokenID, ledger.AssetTypeTokenAddressID, ledger.RetrieveOperationFindOrCreate)
 		accountID, _ := l.RetrieveAccountByAddress(d.Sender, ledger.RetrieveOperationFindOrCreate)
 		l.Deposit(assetID, accountID, big.NewInt(1))
 		log.Printf("[handling-assets] %s deposited ERC721 %s #%s", d.Sender.Hex(), d.Token.Hex(), d.TokenID)
 		return true
 
-	case parser.InputTypeERC721Withdrawal:
-		w := decodedInput.(*parser.ERC721Withdrawal)
-		assetID, _ := l.RetrieveAsset(w.Token, w.TokenID, ledger.AssetTypeTokenAddressID, ledger.RetrieveOperationFind)
+	case *parser.ERC721Withdrawal:
+		assetID, _ := l.RetrieveAsset(d.Token, d.TokenID, ledger.AssetTypeTokenAddressID, ledger.RetrieveOperationFind)
 		accountID, _ := l.RetrieveAccountByAddress(msgSender, ledger.RetrieveOperationFind)
 		l.Withdraw(assetID, accountID, big.NewInt(1))
-		v, _ := parser.EncodeERC721Voucher(w.Token, advance.AppContract, msgSender, w.TokenID)
+		v, _ := parser.EncodeERC721Voucher(d.Token, advance.AppContract, msgSender, d.TokenID)
 		r.EmitVoucher(v.Destination, v.Value, v.Payload)
-		log.Printf("[handling-assets] %s withdrew ERC721 %s #%s", msgSender.Hex(), w.Token.Hex(), w.TokenID)
+		log.Printf("[handling-assets] %s withdrew ERC721 %s #%s", msgSender.Hex(), d.Token.Hex(), d.TokenID)
 		return true
 
-	case parser.InputTypeERC721Transfer:
-		t := decodedInput.(*parser.ERC721Transfer)
-		assetID, _ := l.RetrieveAsset(t.Token, t.TokenID, ledger.AssetTypeTokenAddressID, ledger.RetrieveOperationFind)
+	case *parser.ERC721Transfer:
+		assetID, _ := l.RetrieveAsset(d.Token, d.TokenID, ledger.AssetTypeTokenAddressID, ledger.RetrieveOperationFind)
 		fromID, _ := l.RetrieveAccountByAddress(msgSender, ledger.RetrieveOperationFind)
-		toID, _ := l.RetrieveAccountByID(t.Receiver, ledger.RetrieveOperationFindOrCreate)
+		toID, _ := l.RetrieveAccountByID(d.Receiver, ledger.RetrieveOperationFindOrCreate)
 		l.Transfer(assetID, fromID, toID, big.NewInt(1))
-		log.Printf("[handling-assets] %s transferred ERC721 %s #%s to %s", msgSender.Hex(), t.Token.Hex(), t.TokenID, t.Receiver.Hex())
+		log.Printf("[handling-assets] %s transferred ERC721 %s #%s to %s", msgSender.Hex(), d.Token.Hex(), d.TokenID, d.Receiver.Hex())
 		return true
 
-	// ERC1155 Single
-	case parser.InputTypeERC1155SingleDeposit:
-		d := decodedInput.(*parser.ERC1155SingleDeposit)
+	case *parser.ERC1155SingleDeposit:
 		assetID, _ := l.RetrieveAsset(d.Token, d.TokenID, ledger.AssetTypeTokenAddressID, ledger.RetrieveOperationFindOrCreate)
 		accountID, _ := l.RetrieveAccountByAddress(d.Sender, ledger.RetrieveOperationFindOrCreate)
 		l.Deposit(assetID, accountID, d.Amount)
 		log.Printf("[handling-assets] %s deposited %s of ERC1155 %s #%s", d.Sender.Hex(), d.Amount, d.Token.Hex(), d.TokenID)
 		return true
 
-	case parser.InputTypeERC1155SingleWithdrawal:
-		w := decodedInput.(*parser.ERC1155SingleWithdrawal)
-		assetID, _ := l.RetrieveAsset(w.Token, w.TokenID, ledger.AssetTypeTokenAddressID, ledger.RetrieveOperationFind)
+	case *parser.ERC1155SingleWithdrawal:
+		assetID, _ := l.RetrieveAsset(d.Token, d.TokenID, ledger.AssetTypeTokenAddressID, ledger.RetrieveOperationFind)
 		accountID, _ := l.RetrieveAccountByAddress(msgSender, ledger.RetrieveOperationFind)
-		l.Withdraw(assetID, accountID, w.Amount)
-		v, _ := parser.EncodeERC1155SingleVoucher(w.Token, advance.AppContract, msgSender, w.TokenID, w.Amount)
+		l.Withdraw(assetID, accountID, d.Amount)
+		v, _ := parser.EncodeERC1155SingleVoucher(d.Token, advance.AppContract, msgSender, d.TokenID, d.Amount)
 		r.EmitVoucher(v.Destination, v.Value, v.Payload)
-		log.Printf("[handling-assets] %s withdrew %s of ERC1155 %s #%s", msgSender.Hex(), w.Amount, w.Token.Hex(), w.TokenID)
+		log.Printf("[handling-assets] %s withdrew %s of ERC1155 %s #%s", msgSender.Hex(), d.Amount, d.Token.Hex(), d.TokenID)
 		return true
 
-	case parser.InputTypeERC1155SingleTransfer:
-		t := decodedInput.(*parser.ERC1155SingleTransfer)
-		assetID, _ := l.RetrieveAsset(t.Token, t.TokenID, ledger.AssetTypeTokenAddressID, ledger.RetrieveOperationFind)
+	case *parser.ERC1155SingleTransfer:
+		assetID, _ := l.RetrieveAsset(d.Token, d.TokenID, ledger.AssetTypeTokenAddressID, ledger.RetrieveOperationFind)
 		fromID, _ := l.RetrieveAccountByAddress(msgSender, ledger.RetrieveOperationFind)
-		toID, _ := l.RetrieveAccountByID(t.Receiver, ledger.RetrieveOperationFindOrCreate)
-		l.Transfer(assetID, fromID, toID, t.Amount)
-		log.Printf("[handling-assets] %s transferred %s of ERC1155 %s #%s to %s", msgSender.Hex(), t.Amount, t.Token.Hex(), t.TokenID, t.Receiver.Hex())
+		toID, _ := l.RetrieveAccountByID(d.Receiver, ledger.RetrieveOperationFindOrCreate)
+		l.Transfer(assetID, fromID, toID, d.Amount)
+		log.Printf("[handling-assets] %s transferred %s of ERC1155 %s #%s to %s", msgSender.Hex(), d.Amount, d.Token.Hex(), d.TokenID, d.Receiver.Hex())
 		return true
 
-	// ERC1155 Batch
-	case parser.InputTypeERC1155BatchDeposit:
-		d := decodedInput.(*parser.ERC1155BatchDeposit)
+	case *parser.ERC1155BatchDeposit:
 		accountID, _ := l.RetrieveAccountByAddress(d.Sender, ledger.RetrieveOperationFindOrCreate)
 		for i, tokenID := range d.TokenIDs {
 			assetID, _ := l.RetrieveAsset(d.Token, tokenID, ledger.AssetTypeTokenAddressID, ledger.RetrieveOperationFindOrCreate)
@@ -149,31 +156,29 @@ func handleAdvance(r *rollup.Rollup, l *ledger.Ledger) bool {
 		log.Printf("[handling-assets] %s deposited ERC1155 batch from %s", d.Sender.Hex(), d.Token.Hex())
 		return true
 
-	case parser.InputTypeERC1155BatchWithdrawal:
-		w := decodedInput.(*parser.ERC1155BatchWithdrawal)
+	case *parser.ERC1155BatchWithdrawal:
 		accountID, _ := l.RetrieveAccountByAddress(msgSender, ledger.RetrieveOperationFind)
-		for i, tokenID := range w.TokenIDs {
-			assetID, _ := l.RetrieveAsset(w.Token, tokenID, ledger.AssetTypeTokenAddressID, ledger.RetrieveOperationFind)
-			l.Withdraw(assetID, accountID, w.Amounts[i])
+		for i, tokenID := range d.TokenIDs {
+			assetID, _ := l.RetrieveAsset(d.Token, tokenID, ledger.AssetTypeTokenAddressID, ledger.RetrieveOperationFind)
+			l.Withdraw(assetID, accountID, d.Amounts[i])
 		}
-		v, _ := parser.EncodeERC1155BatchVoucher(w.Token, advance.AppContract, msgSender, w.TokenIDs, w.Amounts)
+		v, _ := parser.EncodeERC1155BatchVoucher(d.Token, advance.AppContract, msgSender, d.TokenIDs, d.Amounts)
 		r.EmitVoucher(v.Destination, v.Value, v.Payload)
-		log.Printf("[handling-assets] %s withdrew ERC1155 batch from %s", msgSender.Hex(), w.Token.Hex())
+		log.Printf("[handling-assets] %s withdrew ERC1155 batch from %s", msgSender.Hex(), d.Token.Hex())
 		return true
 
-	case parser.InputTypeERC1155BatchTransfer:
-		t := decodedInput.(*parser.ERC1155BatchTransfer)
+	case *parser.ERC1155BatchTransfer:
 		fromID, _ := l.RetrieveAccountByAddress(msgSender, ledger.RetrieveOperationFind)
-		toID, _ := l.RetrieveAccountByID(t.Receiver, ledger.RetrieveOperationFindOrCreate)
-		for i, tokenID := range t.TokenIDs {
-			assetID, _ := l.RetrieveAsset(t.Token, tokenID, ledger.AssetTypeTokenAddressID, ledger.RetrieveOperationFind)
-			l.Transfer(assetID, fromID, toID, t.Amounts[i])
+		toID, _ := l.RetrieveAccountByID(d.Receiver, ledger.RetrieveOperationFindOrCreate)
+		for i, tokenID := range d.TokenIDs {
+			assetID, _ := l.RetrieveAsset(d.Token, tokenID, ledger.AssetTypeTokenAddressID, ledger.RetrieveOperationFind)
+			l.Transfer(assetID, fromID, toID, d.Amounts[i])
 		}
-		log.Printf("[handling-assets] %s transferred ERC1155 batch of %s to %s", msgSender.Hex(), t.Token.Hex(), t.Receiver.Hex())
+		log.Printf("[handling-assets] %s transferred ERC1155 batch of %s to %s", msgSender.Hex(), d.Token.Hex(), d.Receiver.Hex())
 		return true
 
 	default:
-		log.Printf("[handling-assets] unknown input type: %v", inputType)
+		log.Printf("[handling-assets] unknown input type")
 		return false
 	}
 }
@@ -185,7 +190,7 @@ func handleInspect(r *rollup.Rollup, l *ledger.Ledger) bool {
 		return false
 	}
 
-	decoded, inputType, err := parser.DecodeInspect(inspect)
+	decoded, inputType, err := parser.DecodeInspect(inspect.Payload)
 	if err != nil {
 		log.Printf("[handling-assets] failed to decode inspect: %v", err)
 		return false
